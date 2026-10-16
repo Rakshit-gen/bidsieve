@@ -38,6 +38,110 @@ Treat every (request, buyer) decision as a guess with an error bar, and send wit
 
 [DESIGN.md](DESIGN.md) goes through each step, the maths in plain words, and what breaks when you take it out.
 
+## Results
+
+All of this comes from a simulated exchange, described under [How it was measured](#how-it-was-measured). The full tables are in [results/](results/).
+
+### Revenue
+
+Standard scenario: 20 minutes, 1,500 impressions a second, 10 buyers, duplicate copies through up to four paths, a buyer changing its mind at 8 minutes, 60 new publishers at 12 minutes, and traffic doubling for a minute at 16 minutes.
+
+| policy | revenue | of every bid buyers would make | of the oracle | copies sent to a buyer that had it |
+|---|---:|---:|---:|---:|
+| oracle (knows each buyer's true bid rate) | $1390 | 82.5% | 100.0% | 0.0% |
+| **bidsieve** | **$1328** | **78.8%** | **95.5%** | **2.1%** |
+| segment history | $819 | 48.6% | 58.9% | 45.4% |
+| segment history + 5% control | $770 | 45.7% | 55.4% | 45.1% |
+| tuple history + 5% control (DTE-style) | $466 | 27.7% | 33.5% | 42.3% |
+| random | $309 | 18.3% | 22.2% | 10.7% |
+
+The clairvoyant row in [compare.md](results/compare.md) knows each answer in advance and reaches 99.6%. It's there to show the ceiling, not as a target.
+
+Part of the gap is duplicates, which the history baselines don't detect. With every impression arriving once, bidsieve gets 79.6% of the ceiling (96.1% of the oracle), segment history with control 67.6% (81.6%), and tuple history 43.3%.
+
+Across five other worlds (seeds 100 to 104), bidsieve averages 97.0% ± 2.1 of the oracle, against 66.0% ± 8.4 for segment history with control ([seeds.md](results/seeds.md)).
+
+### When a buyer changes its mind
+
+At t=480s, dsp02 starts a European video campaign on a segment it ignored until then, and dsp05 ends its US and Indian mobile banner campaign.
+
+| policy | new campaign's bids caught, first minute | minutes 1-4 | minutes 4-8 | time to 80% of oracle |
+|---|---:|---:|---:|---:|
+| oracle | 99.2% | 99.5% | 99.8% | 30s |
+| **bidsieve** | **55.0%** | **96.3%** | **99.8%** | **80s** |
+| segment history + control | 0.6% | 38.7% | 51.8% | never |
+| segment history | 0.0% | 0.0% | 0.0% | never |
+| tuple history + control | 0.6% | 1.6% | 3.7% | never |
+
+![Share of dsp02's new-segment bids that got through](results/drift.svg)
+
+Segment history learned that dsp02 doesn't want European video and never finds out otherwise. A control group lets some through, but not enough to undo the block. bidsieve's old evidence fades, its uncertainty grows, and the segment gets sampled again on its own. In the single-path scenario recovery is slower, 150s to 80% of the oracle; I haven't pinned down why.
+
+bidsieve is slower than it should be at letting go of the campaign that ended: it still sends 105.9 requests a second to that dead segment over the next eight minutes, against 33.8 for the oracle. Fading works on both kinds of change, but a segment with a lot of history takes a while to fade. A 15s half-life cuts that to 47.5, at a cost of 1.3% of revenue ([sweep.md](results/sweep.md)).
+
+### New publishers
+
+| policy | bids caught on new publishers, first minute |
+|---|---:|
+| oracle | 62.2% |
+| **bidsieve** | **60.6%** |
+| segment history | 33.4% |
+| segment history + control | 26.5% |
+| tuple history + control | 1.0% |
+
+![Share of bids on new publishers that happened](results/new-publishers.svg)
+
+A new publisher starts with its segment's estimate, so it's treated like the publishers it resembles from the first request.
+
+### What each piece is worth
+
+Each row turns one idea off ([ablate.md](results/ablate.md)):
+
+| variant | revenue vs full | what broke |
+|---|---:|---|
+| no fading | -0.9% | European video capture in minutes 1-4 drops from 96.3% to 40.8% |
+| no backoff to coarser levels | -21.6% | new publishers in the first minute drop to 33.9% |
+| no IPS weights | -0.4% | almost nothing, see below |
+| fixed 5% random explore instead of probability matching | -33.3% | the exploration budget goes to requests that are clearly bad |
+| no duplicate detection | -17.7% | 38.8% of sends go to buyers that already had the impression |
+
+Two of these deserve a straight answer. Fading barely moves total revenue, because the starved segment is one of many, but that is exactly how starvation hides in a dashboard. IPS weights on the coarse levels make almost no difference here; they're kept because they're cheap and make the coarse estimates mean what they say, not because this simulator shows a win.
+
+### Duplicates
+
+| fingerprint window | copies caught (recall) | skips that were real copies (precision) | revenue |
+|---|---:|---:|---:|
+| off | 0.0% | | $1093 |
+| 100ms | 79.0% | 100.0% | $1259 |
+| **300ms** | **98.1%** | **99.8%** | **$1328** |
+| 600ms | 100.0% | 98.9% | $1331 |
+| 2s | 100.0% | 94.6% | $1309 |
+
+Longer windows catch every copy but start skipping real page reloads. 300ms is the default. 600ms is $3 better in this world, which isn't worth changing a default over.
+
+### Offline evaluation
+
+The model is frozen halfway through a run, and fixed rules on that frozen model are scored from the second half's logs, then compared with their true value from the world ([ope.md](results/ope.md)).
+
+With bidsieve's logs, IPS and the doubly robust estimator land within 0.6% of the truth for the three frozen-model rules, and DR within 0.1%. Policies that send far more than the logger did, such as "send everything", come out 2.9% to 3.4% low. Naive replay overstates by up to 251.8%.
+
+With segment history's logs, 11.0% to 78.5% of the requests a target would send could never have been sent by the logger, so IPS is off by 7.4% to 27.5%. No estimator can fix that: the data isn't there.
+
+### Speed
+
+On an Apple M4 ([bench.md](results/bench.md)):
+
+| | |
+|---|---:|
+| decide, all 10 buyers, p50 | 2.83 µs |
+| decide, p99 | 5.12 µs |
+| observe one outcome | 303 ns |
+| decisions per second, 1 goroutine | 307,730 |
+| decisions per second, 4 goroutines | 814,976 |
+| model after 10 simulated minutes | 86,158 cells, 20.5 MB |
+
+Eight goroutines manage 729,714 decisions a second, fewer than four, because the M4's other six cores are efficiency cores.
+
 ## Using the library
 
 ```go
