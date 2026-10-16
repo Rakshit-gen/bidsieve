@@ -1,7 +1,9 @@
 package sim
 
 import (
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -260,7 +262,10 @@ func (h *History) rebuild() {
 		var volume, blockedRate float64
 		var pooled tupleStat // tuples too thin to judge alone, judged together
 		blocked := map[uint64]bool{}
-		for k, a := range agg {
+		// Walk tuples in key order: map order is random, and with many tuples
+		// tied at zero value it would decide which ones get blocked.
+		for _, k := range slices.Sorted(maps.Keys(agg)) {
+			a := agg[k]
 			rate := a.seen / seconds
 			switch {
 			case a.sent >= float64(h.MinSent):
@@ -284,7 +289,7 @@ func (h *History) rebuild() {
 			known = append(known, ranked{newKey, pooled.value / pooled.sent, pooled.seen})
 		}
 		// Block from the bottom up until what's left fits.
-		sort.Slice(known, func(i, j int) bool { return known[i].vpr < known[j].vpr })
+		sort.SliceStable(known, func(i, j int) bool { return known[i].vpr < known[j].vpr })
 		budget := float64(pc.Cap()) * 0.95 * (1 - h.Control)
 		blockNew := false
 		allowed := map[uint64]bool{}

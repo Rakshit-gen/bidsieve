@@ -16,11 +16,19 @@ func short() Scenario {
 
 func TestSameScenarioSameResult(t *testing.T) {
 	sc := short()
-	a := Run(sc, NewBidsieve(NewWorld(sc), "b", nil), nil)
-	b := Run(sc, NewBidsieve(NewWorld(sc), "b", nil), nil)
-	if a.Revenue != b.Revenue || a.Sent != b.Sent || a.Requests != b.Requests {
-		t.Fatalf("two runs of one scenario differ: %v/%v/%v vs %v/%v/%v",
-			a.Revenue, a.Sent, a.Requests, b.Revenue, b.Sent, b.Requests)
+	builds := map[string]func(*World) Policy{
+		"bidsieve": func(w *World) Policy { return NewBidsieve(w, "b", nil) },
+		"history":  func(w *World) Policy { return NewHistory(w, "h", SegmentKey, 20, 5, 0.05) },
+	}
+	for name, build := range builds {
+		a := Run(sc, build(NewWorld(sc)), nil)
+		for range 3 {
+			b := Run(sc, build(NewWorld(sc)), nil)
+			if a.Revenue != b.Revenue || a.Sent != b.Sent || a.Requests != b.Requests {
+				t.Fatalf("%s: two runs of one scenario differ: %v/%v/%v vs %v/%v/%v",
+					name, a.Revenue, a.Sent, a.Requests, b.Revenue, b.Sent, b.Requests)
+			}
+		}
 	}
 }
 
