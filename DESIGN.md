@@ -120,7 +120,7 @@ There's one subtlety. A request the policy chose to send can still be refused be
 
 ## What it costs
 
-On an Apple M4, a decision across 10 buyers takes 3.08 µs at the median and 6.67 µs at p99. Feeding back one outcome takes 298 ns. One goroutine handles 298k decisions per second; four handle 761k. After ten simulated minutes the model holds 86k cells in 20.5 MB of heap.
+On an Apple M4, a decision across 10 buyers takes 2.83 µs at the median and 5.12 µs at p99. Feeding back one outcome takes 303 ns. One goroutine handles 308k decisions per second; four handle 815k. Eight do worse than four (730k), because the M4's extra cores are efficiency cores. After ten simulated minutes the model holds 86k cells in 20.5 MB of heap.
 
 ## What this design doesn't do
 
