@@ -6,9 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Rakshit-gen/bidsieve/internal/svg"
@@ -25,6 +28,7 @@ commands:
   ope       how well logged decisions predict other policies
   bench     decision latency, throughput and memory
   report    the per-buyer withheld-traffic report from one run
+  seeds     the main comparison repeated over five random worlds
   all       everything above, written to -out
 `
 
@@ -50,9 +54,10 @@ func main() {
 		"ope":     runOPE,
 		"bench":   bench,
 		"report":  report,
+		"seeds":   seeds,
 	}
 	if cmd == "all" {
-		for _, name := range []string{"compare", "ablate", "dedupe", "ope", "bench", "report"} {
+		for _, name := range []string{"compare", "ablate", "dedupe", "ope", "bench", "report", "seeds"} {
 			fmt.Fprintf(os.Stderr, "running %s...\n", name)
 			start := time.Now()
 			run[name](*out)
@@ -312,4 +317,69 @@ func report(dir string) {
 	shape.WriteReport(&b, p.S.Report(3), shape.CountryName)
 	b.WriteString("```\n\n")
 	emit(dir, "report.md", b.String())
+}
+
+// seeds repeats the comparison on worlds built from different seeds, so a
+// result that only holds for seed 7 shows up as a wide spread.
+func seeds(dir string) {
+	keep := []string{"oracle", "bidsieve", "segment history+control", "segment history", "tuple history+control"}
+	build := func(w *sim.World) []sim.Policy {
+		var ps []sim.Policy
+		for _, p := range sim.Policies(w) {
+			if slices.Contains(keep, p.Name()) {
+				ps = append(ps, p)
+			}
+		}
+		return ps
+	}
+	const n = 5
+	type col struct{ rev, vsOracle, drift, newPubs []float64 }
+	cols := make([]col, len(keep))
+	sums := make([][]sim.Summary, n)
+	var wg sync.WaitGroup
+	for seed := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sc := sim.Standard()
+			sc.Seed = 100 + uint64(seed)
+			res := sim.Compare(sc, build)
+			oracle := find(res, "oracle")
+			for _, r := range res {
+				sums[seed] = append(sums[seed], sim.Summarize(sc, r, oracle))
+			}
+		}()
+	}
+	wg.Wait()
+	for _, row := range sums {
+		for i, s := range row {
+			c := &cols[i]
+			c.rev = append(c.rev, s.RevenuePct)
+			c.vsOracle = append(c.vsOracle, s.VsOracle)
+			c.drift = append(c.drift, s.DriftMid)
+			c.newPubs = append(c.newPubs, s.NewFirstMin)
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Across seeds\n\nThe standard scenario rebuilt with seeds 100 to %d: different publishers, buyer tastes and traffic each time. Mean ± standard deviation over %d runs.\n\n", 100+n-1, n)
+	b.WriteString("| policy | of ceiling | of oracle | European video, minutes 1-4 | new publishers, first minute |\n|---|---:|---:|---:|---:|\n")
+	for i, name := range keep {
+		c := cols[i]
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", name, meanSD(c.rev), meanSD(c.vsOracle), meanSD(c.drift), meanSD(c.newPubs))
+	}
+	b.WriteString("\n")
+	emit(dir, "seeds.md", b.String())
+}
+
+func meanSD(xs []float64) string {
+	var m, v float64
+	for _, x := range xs {
+		m += x
+	}
+	m /= float64(len(xs))
+	for _, x := range xs {
+		v += (x - m) * (x - m)
+	}
+	sd := math.Sqrt(v / float64(max(1, len(xs)-1)))
+	return fmt.Sprintf("%.1f%% ± %.1f", 100*m, 100*sd)
 }
