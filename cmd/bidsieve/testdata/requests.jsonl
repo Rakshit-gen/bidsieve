@@ -1,0 +1,4 @@
+{"id":"r1","imp":[{"id":"1","tagid":"top","banner":{"w":300,"h":250,"pos":1}}],"site":{"id":"s1","page":"https://news.example/a","publisher":{"id":"pub-1"}},"device":{"devicetype":2,"ifa":"","geo":{"country":"USA"}},"source":{"tid":"t-1"}}
+{"id":"r2","imp":[{"id":"1","tagid":"pre","video":{"pos":3}}],"app":{"id":"a9","bundle":"com.example.tv","publisher":{"id":"pub-2"}},"device":{"devicetype":3,"ifa":"f0e1","geo":{"country":"DEU"}},"source":{"tid":"t-2"}}
+{"id":"r2-copy","imp":[{"id":"1","tagid":"pre","video":{"pos":3}}],"app":{"id":"a9","bundle":"com.example.tv","publisher":{"id":"pub-2"}},"device":{"devicetype":3,"ifa":"f0e1","geo":{"country":"DEU"}},"source":{"tid":"t-2b"}}
+not json

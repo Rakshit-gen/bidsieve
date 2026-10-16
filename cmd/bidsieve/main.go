@@ -20,6 +20,7 @@ import (
 )
 
 const usage = `usage: bidsieve <command> [-out dir]
+       bidsieve decide [-buyers name:qps,...] [-trust-tid] < requests.jsonl
 
 commands:
   compare   every policy on the standard scenario and the single-path one
@@ -31,6 +32,7 @@ commands:
   seeds     the main comparison repeated over five random worlds
   sweep     bidsieve across half-lives and exploration floors
   all       everything above, written to -out
+  decide    shape OpenRTB requests read from stdin, one per line
 `
 
 func main() {
@@ -39,6 +41,10 @@ func main() {
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
+	if cmd == "decide" {
+		decideCmd(os.Args[2:])
+		return
+	}
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	out := fs.String("out", "", "directory for markdown, CSV and SVG output (default: print only)")
 	fs.Parse(os.Args[2:])
