@@ -37,3 +37,59 @@ Treat every (request, buyer) decision as a guess with an error bar, and send wit
 - **Tell buyers what they didn't get.** A per-buyer report of what was withheld, why, and roughly what it was worth.
 
 [DESIGN.md](DESIGN.md) goes through each step, the maths in plain words, and what breaks when you take it out.
+
+## Using the library
+
+```go
+cfg := shape.DefaultConfig()
+cfg.Buyers = []shape.Buyer{{Name: "dsp-a", QPS: 5000}, {Name: "dsp-b", QPS: 800}}
+s, err := shape.New(cfg)
+if err != nil {
+	return err
+}
+
+// Per incoming request. FromOpenRTB turns one bid request into one
+// Request per impression.
+reqs, err := shape.FromOpenRTB(body, &publishers, false)
+decs := make([]shape.Decision, 0, len(cfg.Buyers))
+for i := range reqs {
+	decs = s.Decide(&reqs[i], time.Now(), decs)
+	for _, d := range decs {
+		if d.Send {
+			forward(d.Buyer, reqs[i], d.Prop) // keep Prop with the request
+		}
+	}
+}
+
+// When a buyer answers, or times out (report that as no bid):
+s.Observe(shape.Outcome{Buyer: b, Features: req.Features, Prop: prop, Bid: bid, Price: cpm, At: time.Now()})
+```
+
+`Shaper` is safe for concurrent use. `Decide` doesn't allocate when `decs` has room for every buyer. Log `Decision.Prop` next to each outcome if you want to evaluate other policies offline later; the `ope` package does the estimating. `s.Report(n)` returns what each buyer had withheld and why, with the top `n` segments by estimated value.
+
+Pass `trustTID = true` to `FromOpenRTB` only if every path to your exchange carries the same `source.tid` for the same impression. OpenRTB 2.6 says it must, but wrappers have sent each bidder a different one, so by default only the fingerprint is used.
+
+## Running it
+
+Go 1.24 or later. Everything runs on a laptop CPU.
+
+```
+go test -race ./...
+go run ./cmd/bidsieve all -out results     # every experiment, about five minutes
+go run ./cmd/bidsieve compare              # or one at a time: ablate, dedupe, ope, bench, report, seeds, sweep
+go run ./cmd/bidsieve decide -buyers a:100,b:5 < cmd/bidsieve/testdata/requests.jsonl
+go test -bench . ./shape
+```
+
+`decide` reads OpenRTB 2.x bid requests, one per line, and prints one JSON line per impression and buyer. The model starts empty there, so it shows cold-start behaviour and checks that real requests parse.
+
+## Layout
+
+```
+shape/           the library: model, pacer, send rule, dedupe, reports, OpenRTB input
+ope/             streaming IPS, SNIPS and doubly robust estimators
+sim/             the simulated exchange, baseline policies and experiments
+cmd/bidsieve/    the command behind every number in results/
+internal/svg/    the line charts in results/
+results/         generated output: markdown tables, CSV series, SVG charts
+```
