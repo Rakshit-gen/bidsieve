@@ -142,6 +142,45 @@ On an Apple M4 ([bench.md](results/bench.md)):
 
 Eight goroutines manage 729,714 decisions a second, fewer than four, because the M4's other six cores are efficiency cores.
 
+## How it was measured
+
+Real bid logs can't judge a shaper: they don't say what a buyer would have done with the requests it never saw. So `sim` builds an exchange where every buyer's answer to every impression is fixed in advance by a hash of the impression and the buyer. Every policy runs against the same traffic and the same answers, and every miss can be counted.
+
+- 400 publishers with skewed traffic, 12 countries, six formats, four device types, web and app.
+- 10 buyers with their own tastes per segment and caps from 50% down to 8% of the impression rate.
+- Impressions reach the exchange through up to four paths. 35% of copies carry a shared tid, and 3% of page views are reloaded within two seconds, which look like copies but aren't.
+- Revenue is the best bid each impression received, so a request sent to a second buyer that loses the auction adds nothing.
+- The oracle knows each buyer's true chance of bidding on each request and the expected price, but not whether it will actually bid. It's the best a shaper could do with perfect learning.
+- Baselines: segment and tuple history refresh on a schedule (60s and 300s), block the lowest-value tuples until volume fits the cap, keep blocked tuples blocked without fresh evidence, and optionally forward a 5% control share, roughly as DTE describes.
+
+`go run ./cmd/bidsieve all -out results` reproduces every number here in about four and a half minutes on a 10-core laptop.
+
+## Measured vs Claimed
+
+| Claim | Value | How measured | Date |
+|---|---|---|---|
+| Revenue vs oracle | 95.5% | `bidsieve compare`, standard scenario, seed 7 | 2026-10-16 |
+| Revenue vs oracle across seeds | 97.0% ± 2.1 | `bidsieve seeds`, seeds 100-104 | 2026-10-16 |
+| Revenue vs best history baseline | $1328 vs $819 | `bidsieve compare`, standard scenario | 2026-10-16 |
+| Drifted segment caught, minutes 1-4 | 96.3% (segment history 0.0%) | `bidsieve compare` | 2026-10-16 |
+| New publishers caught, first minute | 60.6% (oracle 62.2%) | `bidsieve compare` | 2026-10-16 |
+| Duplicate recall / precision at 300ms | 98.1% / 99.8% | `bidsieve dedupe` | 2026-10-16 |
+| Offline estimate error, frozen-model rules | within 0.6% (DR within 0.1%) | `bidsieve ope`, bidsieve logs | 2026-10-16 |
+| Decide p50 / p99, 10 buyers | 2.83 µs / 5.12 µs | `bidsieve bench`, Apple M4, go1.25.4, idle machine | 2026-10-16 |
+| Throughput, 4 goroutines | 814,976 decisions/s | `bidsieve bench`, same machine | 2026-10-16 |
+
+All of these are from a simulator. None are from production traffic.
+
+## Limitations
+
+- **The world is synthetic.** Buyer tastes, caps, traffic mix and duplicate paths are made up to be plausible, not fitted to any real exchange.
+- **The tuple-history baseline learns only from this exchange's traffic.** A real DSP building DTE files sees bids across all its supply, so it would do better than the tuple rows here.
+- **Buyers are scored independently.** Two buyers who would bid on the same impression both count, though only one can win. A shaper that modelled the auction would send the weaker one less.
+- **Price uncertainty isn't modelled**, only bid-rate uncertainty.
+- **Feedback is instant in the simulator.** Real answers arrive within a timeout and some never arrive.
+- **Most of the history baselines' over-cap refusals** happen in the first minute, before they have any history, and during the traffic spike.
+- **bidsieve is slow to drop a segment a buyer stopped wanting**, as shown above.
+
 ## Using the library
 
 ```go
