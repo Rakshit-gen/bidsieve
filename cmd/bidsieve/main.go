@@ -29,6 +29,7 @@ commands:
   bench     decision latency, throughput and memory
   report    the per-buyer withheld-traffic report from one run
   seeds     the main comparison repeated over five random worlds
+  sweep     bidsieve across half-lives and exploration floors
   all       everything above, written to -out
 `
 
@@ -55,9 +56,10 @@ func main() {
 		"bench":   bench,
 		"report":  report,
 		"seeds":   seeds,
+		"sweep":   sweep,
 	}
 	if cmd == "all" {
-		for _, name := range []string{"compare", "ablate", "dedupe", "ope", "bench", "report", "seeds"} {
+		for _, name := range []string{"compare", "ablate", "dedupe", "ope", "bench", "report", "seeds", "sweep"} {
 			fmt.Fprintf(os.Stderr, "running %s...\n", name)
 			start := time.Now()
 			run[name](*out)
@@ -382,4 +384,45 @@ func meanSD(xs []float64) string {
 	}
 	sd := math.Sqrt(v / float64(max(1, len(xs)-1)))
 	return fmt.Sprintf("%.1f%% ± %.1f", 100*m, 100*sd)
+}
+
+// sweep moves the two settings that trade reaction speed against wasted
+// sends, one at a time, keeping the other at its default.
+func sweep(dir string) {
+	sc := sim.Standard()
+	halfLives := []time.Duration{15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute, -1}
+	floors := []float64{0.0005, 0.001, 0.002, 0.005, 0.01, 0.02}
+	build := func(w *sim.World) []sim.Policy {
+		var ps []sim.Policy
+		for _, h := range halfLives {
+			ps = append(ps, sim.NewBidsieve(w, "half-life "+h.String(), func(c *shape.Config) { c.HalfLife = h }))
+		}
+		for _, f := range floors {
+			ps = append(ps, sim.NewBidsieve(w, fmt.Sprintf("floor %g", f), func(c *shape.Config) { c.MinExplore = f }))
+		}
+		return ps
+	}
+	res := sim.Compare(sc, build)
+	row := func(b *strings.Builder, label string, r *sim.Result) {
+		s := sim.Summarize(sc, r, nil)
+		fmt.Fprintf(b, "| %s | $%.0f | %s | %s | %s | %s | %.1f |\n", label, s.Revenue, pct(s.RevenuePct),
+			pct(s.DriftEarly), pct(s.DriftMid), pct(s.NewFirstMin), s.DroppedPerSec)
+	}
+	head := " | revenue | of ceiling | European video, first minute | minutes 1-4 | new publishers, first minute | sends/s to the dead segment |\n|---|---:|---:|---:|---:|---:|---:|\n"
+	var b strings.Builder
+	b.WriteString("## Sensitivity (standard scenario)\n\nOne setting moves at a time; the other stays at its default (half-life 2m, floor 0.002).\n\n")
+	b.WriteString("| half-life" + head)
+	for i, h := range halfLives {
+		label := h.String()
+		if h < 0 {
+			label = "no fading"
+		}
+		row(&b, label, res[i])
+	}
+	b.WriteString("\n| exploration floor" + head)
+	for i, f := range floors {
+		row(&b, fmt.Sprintf("%g", f), res[len(halfLives)+i])
+	}
+	b.WriteString("\n")
+	emit(dir, "sweep.md", b.String())
 }
