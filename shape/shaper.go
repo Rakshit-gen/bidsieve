@@ -136,7 +136,6 @@ type Outcome struct {
 // It is safe for concurrent use.
 type Shaper struct {
 	cfg    Config
-	decay  float64 // per nanosecond
 	tab    *table
 	pacers []*Pacer
 	dd     *dedupe
@@ -182,10 +181,11 @@ func New(cfg Config) (*Shaper, error) {
 	if cfg.TIDWindow < cfg.DedupeWindow {
 		cfg.TIDWindow = cfg.DedupeWindow
 	}
-	s := &Shaper{cfg: cfg, tab: newTable(), stats: make([]buyerStats, len(cfg.Buyers))}
+	var k float64
 	if cfg.HalfLife > 0 {
-		s.decay = math.Ln2 / float64(cfg.HalfLife)
+		k = math.Ln2 / float64(cfg.HalfLife)
 	}
+	s := &Shaper{cfg: cfg, tab: newTable(k), stats: make([]buyerStats, len(cfg.Buyers))}
 	for _, b := range cfg.Buyers {
 		s.pacers = append(s.pacers, NewPacer(b.QPS, cfg.Headroom))
 	}
@@ -206,7 +206,7 @@ func (s *Shaper) Lambda(buyer int) float64 { return s.pacers[buyer].Lambda() }
 
 // Estimate returns the model's view of a request for one buyer at time now.
 func (s *Shaper) Estimate(buyer int, f Features, now time.Time) Estimate {
-	return s.estimate(buyer, f.pack(), now.UnixNano())
+	return s.estimate(buyer, f.pack(), s.tab.view(now.UnixNano()))
 }
 
 // Decide fills out with one decision per buyer and returns it. Pass a slice
@@ -222,9 +222,10 @@ func (s *Shaper) Decide(r *Request, now time.Time, out []Decision) []Decision {
 		seen = s.dd.seen(r.Dupe, ns)
 	}
 	var sent uint64
+	v := s.tab.view(ns)
 	for b, pc := range s.pacers {
 		if pc.Roll(sec) && b == 0 {
-			s.tab.sweep(int(s.sweepN.Add(1)), ns, s.decay)
+			s.tab.sweep(int(s.sweepN.Add(1)), ns)
 		}
 		st := &s.stats[b]
 		st.count[0].Add(1) // requests seen
@@ -233,7 +234,7 @@ func (s *Shaper) Decide(r *Request, now time.Time, out []Decision) []Decision {
 			out = append(out, Decision{Buyer: b, Reason: Duplicate})
 			continue
 		}
-		e := s.estimate(b, packed, ns)
+		e := s.estimate(b, packed, v)
 		lambda := pc.Lambda()
 		q := s.sendProb(e, lambda)
 		d := Decision{Buyer: b, Prop: q, Value: e.Value}
@@ -269,7 +270,8 @@ func (s *Shaper) Observe(o Outcome) {
 	if o.Buyer < 0 || o.Buyer >= len(s.pacers) || o.Prop <= 0 {
 		return
 	}
-	ns := o.At.UnixNano()
+	v := s.tab.view(o.At.UnixNano())
+	up := 1 / v.down
 	packed := o.Features.pack()
 	// Within a full tuple, which requests went depends only on the tuple and
 	// the past, so plain counts are fair. Coarser levels mix tuples that
@@ -287,7 +289,7 @@ func (s *Shaper) Observe(o Outcome) {
 		if l == finest {
 			lw = 1
 		}
-		s.tab.add(cellKey(o.Buyer, l, packed), ns, s.decay, lw, o.Bid, o.Price)
+		s.tab.add(cellKey(o.Buyer, l, packed), v, up, lw, o.Bid, o.Price)
 	}
 	if o.Bid {
 		s.stats[o.Buyer].bids.Add(1)
@@ -297,7 +299,7 @@ func (s *Shaper) Observe(o Outcome) {
 // Snapshot returns an independent copy of the shaper's model and prices.
 // Use it to freeze a policy for offline evaluation.
 func (s *Shaper) Snapshot() *Shaper {
-	c := &Shaper{cfg: s.cfg, decay: s.decay, tab: s.tab.clone(), stats: make([]buyerStats, len(s.stats))}
+	c := &Shaper{cfg: s.cfg, tab: s.tab.clone(), stats: make([]buyerStats, len(s.stats))}
 	for i, p := range s.pacers {
 		np := NewPacer(int(p.cap), s.cfg.Headroom)
 		np.lambda.Store(p.lambda.Load())

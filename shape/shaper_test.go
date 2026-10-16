@@ -293,3 +293,22 @@ func TestPackRoundTripsEveryField(t *testing.T) {
 		}
 	}
 }
+
+// Stored values grow between landmark moves. A shaper running for days must
+// move its landmark and keep giving the same answers.
+func TestLandmarkMovesWithoutChangingAnswers(t *testing.T) {
+	s := newTestShaper(t, nil)
+	f := Features{Publisher: 3, Format: Video, Country: 4, Device: CTV}
+	start := t0
+	for h := range 72 {
+		at := start.Add(time.Duration(h) * time.Hour)
+		feed(s, f, at, 300, 0.3, 5)
+		e := s.Estimate(0, f, at)
+		if math.IsNaN(e.P) || math.IsInf(e.N, 0) || math.Abs(e.P-0.3) > 0.03 || e.N < 250 {
+			t.Fatalf("hour %d: %+v", h, e)
+		}
+	}
+	if s.tab.t0.Load() == start.UnixNano() {
+		t.Fatal("landmark never moved in three days")
+	}
+}
