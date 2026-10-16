@@ -23,3 +23,17 @@ History-based shaping has three problems that come from the same place: it only 
 On top of that, buyers get no account of what was withheld from them, and duplicate copies of one impression eat into the same caps.
 
 These aren't problems one exchange has. Media.net, PubMatic, Magnite, Index and every DSP on the other side run some version of this.
+
+## The idea
+
+Treat every (request, buyer) decision as a guess with an error bar, and send with the probability that the request is worth the buyer's budget.
+
+- **Estimate from coarse to fine.** Counts are kept at six levels, from "everything sent to this buyer" down to the full tuple of format, country, device, channel, position and publisher. Each level borrows strength from the one above it, so a new publisher starts with its segment's numbers instead of nothing.
+- **Let evidence fade.** Every count halves every two minutes. An old "no" loses weight, the error bar widens, and the segment starts being sampled again without any schedule telling it to. That is what stops the starvation loop.
+- **Price each buyer's budget.** Each buyer has a price per request that moves once a second with demand against its cap. A request is worth sending when its expected bid value beats the price.
+- **Send by probability, not by threshold.** A request goes with the probability that its true bid rate is above break-even, `Φ((p − λ/price) / σ)`, floored at 0.2%. Sure requests go or don't. Unsure ones near the line get sampled. Exploration ends up where it's useful instead of being a flat random share.
+- **Log the probability.** Every decision returns the chance it had of going. With that, inverse propensity scoring gives honest offline estimates of other policies from the same logs.
+- **Skip copies.** A short memory of which buyers each impression went to, keyed by a fingerprint of publisher, page, slot and device, plus the OpenRTB `source.tid` when it can be trusted.
+- **Tell buyers what they didn't get.** A per-buyer report of what was withheld, why, and roughly what it was worth.
+
+[DESIGN.md](DESIGN.md) goes through each step, the maths in plain words, and what breaks when you take it out.
